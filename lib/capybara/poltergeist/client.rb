@@ -106,7 +106,7 @@ module Capybara::Poltergeist
     ensure
       STDOUT.reopen(prev)
       $stdout = STDOUT
-      prev.close unless prev.closed?
+      IO.for_fd(prev.fileno).close unless prev.closed?
     end
 
     def kill_phantomjs
