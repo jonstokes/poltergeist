@@ -16,19 +16,6 @@ module Capybara::Poltergeist
       client
     end
 
-    # Returns a proc, that when called will attempt to kill the given process.
-    # This is because implementing ObjectSpace.define_finalizer is tricky.
-    # Hat-Tip to @mperham for describing in detail:
-    # http://www.mikeperham.com/2010/02/24/the-trouble-with-ruby-finalizers/
-    def self.process_killer(pid)
-      proc do
-        begin
-          Process.kill('KILL', pid)
-        rescue Errno::ESRCH, Errno::ECHILD
-        end
-      end
-    end
-
     attr_reader :pid, :server, :path, :window_size, :phantomjs_options
 
     def initialize(server, options = {})
@@ -51,28 +38,17 @@ module Capybara::Poltergeist
     end
 
     def start
-      @read_io, @write_io = IO.pipe
-      @out_thread = Thread.new {
-        while !@read_io.eof? && data = @read_io.readpartial(1024)
+      IO.popen(*command.map(&:to_s)) do |pipe|
+        @pid = pipe.pid
+        while !pipe.eof? && data = pipe.readpartial(1024)
           @phantomjs_logger.write(data)
         end
-      }
-
-      process_options = {}
-      process_options[:pgroup] = true unless Capybara::Poltergeist.windows?
-
-      redirect_stdout do
-        @pid = Process.spawn(*command.map(&:to_s), process_options)
-        ObjectSpace.define_finalizer(self, self.class.process_killer(@pid))
       end
     end
 
     def stop
       if pid
         kill_phantomjs
-        @out_thread.kill
-        close_io
-        ObjectSpace.undefine_finalizer(self)
       end
     end
 
@@ -91,23 +67,6 @@ module Capybara::Poltergeist
     end
 
     private
-
-    # This abomination is because JRuby doesn't support the :out option of
-    # Process.spawn. To be honest it works pretty bad with pipes too, because
-    # we ought close writing end in parent process immediately but JRuby will
-    # lose all the output from child. Process.popen can be used here and seems
-    # it works with JRuby but I've experienced strange mistakes on Rubinius.
-    def redirect_stdout
-      prev = STDOUT.dup
-      prev.autoclose = false
-      $stdout = @write_io
-      STDOUT.reopen(@write_io)
-      yield
-    ensure
-      STDOUT.reopen(prev)
-      $stdout = STDOUT
-      IO.for_fd(prev.fileno).close unless prev.closed?
-    end
 
     def kill_phantomjs
       begin
